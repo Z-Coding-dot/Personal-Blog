@@ -306,7 +306,7 @@ app.get("/search-quotes", isAuthenticated, async (req, res) => {
     const httpsAgent = new https.Agent({ rejectUnauthorized: false });
 
     const response = await axios.get(
-      `https://api.quotable.io/quotes?query=${query}`,
+      `https://api.quotable.io/search/quotes?query=${query}`,
       { httpsAgent }
     );
 
