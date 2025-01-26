@@ -294,7 +294,7 @@ app.get("/api1", isAuthenticated, async (req, res) => {
   }
 });
 
-// app.get("/api2", (req, res) => res.render("api2", { quotes: [] }));
+
 app.get("/api2", isAuthenticated, (req, res) => {
   res.render("api2", { quotes: [] });
 });

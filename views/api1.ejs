@@ -10,8 +10,6 @@
     <%- include('navbar') %>
     <div class="container mt-5">
         <h1 class="text-center mb-4">Latest News Articles</h1>
-
-        <!-- Search Form -->
         <form action="/search-news" method="GET" class="mb-4">
             <div class="input-group">
                 <input type="text" name="query" class="form-control" placeholder="Search news..." required>
@@ -19,7 +17,6 @@
             </div>
         </form>
 
-        <!-- News Articles -->
         <div class="row mb-5">
             <% articles.forEach(article => { %>
                 <div class="col-md-6 mb-5">
