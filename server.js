@@ -9,8 +9,6 @@ const bcrypt = require("bcrypt");
 const https = require("https"); 
 const flash = require("connect-flash");
 
-
-
 dotenv.config();
 const app = express();
 const PORT = 3000;
@@ -113,7 +111,8 @@ app.post("/login", async (req, res) => {
     req.session.user = user;
     return res.redirect("/main");
   }
-  res.send("Invalid credentials");
+  req.flash("error", "Wrong username or password, please try again.");
+  res.redirect("/");
 });
 
 app.get("/signup", (req, res) => {
