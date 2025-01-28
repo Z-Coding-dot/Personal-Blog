@@ -246,41 +246,57 @@ app.post("/admin/delete/:id", async (req, res) => {
 });
 
 app.get("/search-news", isAuthenticated, async (req, res) => {
-  const query = req.query.query;
+  const query = req.query.query || "default"; // Default value for query if undefined
   try {
     const response = await axios.get(
-      `https://newsapi.org/v2/everything?q=${query}&apiKey=${process.env.NEWS_API_KEY}`
+      `https://newsapi.org/v2/everything?q=${query}&apiKey=${process.env.NEWS_API_KEY}`,
+      {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        },
+      }
     );
+
     await History.create({
       userId: req.session.user._id,
       action: "Searched news articles",
       input: query,
     });
+
     res.render("api1", { articles: response.data.articles });
   } catch (error) {
-    console.error("Primary API failed. Trying fallback API...", error);
+    console.error("Primary API failed. Trying fallback API...", error.message);
     try {
       const fallbackResponse = await axios.get(
         `https://newsdata.io/api/1/news?apikey=${process.env.SECOND_NEWS_API_KEY}&q=${query}`
       );
+
       await History.create({
         userId: req.session.user._id,
         action: "Searched news articles using fallback API",
         input: query,
       });
-      res.render("api1", { articles: fallbackResponse.data.articles });
+
+      res.render("api1", { articles: fallbackResponse.data.results }); // Adjusted for newsdata.io response
     } catch (fallbackError) {
-      console.error("Both APIs failed:", fallbackError);
+      console.error("Both APIs failed:", fallbackError.message);
       res.status(500).send("Error fetching news articles");
     }
   }
 });
 
 app.get("/api1", isAuthenticated, async (req, res) => {
+  const query = "default"; // Default value for fallback if query is not applicable
   try {
     const response = await axios.get(
-      `https://newsapi.org/v2/top-headlines?country=us&apiKey=${process.env.NEWS_API_KEY}`
+      `https://newsapi.org/v2/top-headlines?country=us&apiKey=${process.env.NEWS_API_KEY}`,
+      {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        },
+      }
     );
+
     const userId = req.session.user._id;
 
     for (const article of response.data.articles) {
@@ -301,20 +317,21 @@ app.get("/api1", isAuthenticated, async (req, res) => {
 
     res.render("api1", { articles: response.data.articles });
   } catch (error) {
-    console.error("Primary API failed. Trying fallback API...", error);
+    console.error("Primary API failed. Trying fallback API...", error.message);
     try {
       const fallbackResponse = await axios.get(
         `https://newsdata.io/api/1/news?apikey=${process.env.SECOND_NEWS_API_KEY}&q=${query}`
       );
+
       const userId = req.session.user._id;
 
-      for (const article of fallbackResponse.data.articles) {
+      for (const article of fallbackResponse.data.results) {
         await API1.create({
           title: article.title,
           description: article.description,
-          url: article.url,
-          publishedAt: article.publishedAt,
-          source: article.source.name,
+          url: article.link, // Adjusted for newsdata.io response
+          publishedAt: article.pubDate, // Adjusted for newsdata.io response
+          source: article.source_id, // Adjusted for newsdata.io response
           userId,
         });
       }
@@ -324,13 +341,14 @@ app.get("/api1", isAuthenticated, async (req, res) => {
         action: "Fetched top headlines from fallback API",
       });
 
-      res.render("api1", { articles: fallbackResponse.data.articles });
+      res.render("api1", { articles: fallbackResponse.data.results }); // Adjusted for newsdata.io response
     } catch (fallbackError) {
-      console.error("Both APIs failed:", fallbackError);
+      console.error("Both APIs failed:", fallbackError.message);
       res.status(500).send("Error fetching news articles");
     }
   }
 });
+
 
 
 
