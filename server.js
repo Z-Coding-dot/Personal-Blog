@@ -258,8 +258,21 @@ app.get("/search-news", isAuthenticated, async (req, res) => {
     });
     res.render("api1", { articles: response.data.articles });
   } catch (error) {
-    console.error("Error fetching news articles:", error);
-    res.status(500).send("Error fetching news articles");
+    console.error("Primary API failed. Trying fallback API...", error);
+    try {
+      const fallbackResponse = await axios.get(
+        `https://newsdata.io/api/1/news?apikey=${process.env.SECOND_NEWS_API_KEY}&q=${query}`
+      );
+      await History.create({
+        userId: req.session.user._id,
+        action: "Searched news articles using fallback API",
+        input: query,
+      });
+      res.render("api1", { articles: fallbackResponse.data.articles });
+    } catch (fallbackError) {
+      console.error("Both APIs failed:", fallbackError);
+      res.status(500).send("Error fetching news articles");
+    }
   }
 });
 
@@ -288,10 +301,37 @@ app.get("/api1", isAuthenticated, async (req, res) => {
 
     res.render("api1", { articles: response.data.articles });
   } catch (error) {
-    console.error("Error fetching top headlines:", error);
-    res.status(500).send("Error fetching news articles");
+    console.error("Primary API failed. Trying fallback API...", error);
+    try {
+      const fallbackResponse = await axios.get(
+        `https://newsdata.io/api/1/news?apikey=${process.env.SECOND_NEWS_API_KEY}&q=${query}`
+      );
+      const userId = req.session.user._id;
+
+      for (const article of fallbackResponse.data.articles) {
+        await API1.create({
+          title: article.title,
+          description: article.description,
+          url: article.url,
+          publishedAt: article.publishedAt,
+          source: article.source.name,
+          userId,
+        });
+      }
+
+      await History.create({
+        userId,
+        action: "Fetched top headlines from fallback API",
+      });
+
+      res.render("api1", { articles: fallbackResponse.data.articles });
+    } catch (fallbackError) {
+      console.error("Both APIs failed:", fallbackError);
+      res.status(500).send("Error fetching news articles");
+    }
   }
 });
+
 
 
 app.get("/api2", isAuthenticated, (req, res) => {
