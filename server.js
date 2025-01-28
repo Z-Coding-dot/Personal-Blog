@@ -242,8 +242,6 @@ app.post("/admin/delete/:id", async (req, res) => {
 app.get("/search-news", isAuthenticated, async (req, res) => {
   const query = req.query.query || "default"; // Default value for query if undefined
   try {
-    console.log("Searching news for query:", query);
-
     const response = await axios.get(
       `https://newsapi.org/v2/everything?q=${query}&apiKey=${process.env.NEWS_API_KEY}`,
       {
@@ -254,13 +252,6 @@ app.get("/search-news", isAuthenticated, async (req, res) => {
       }
     );
 
-    console.log(
-      "Primary API response received:",
-      response.data.articles.length,
-      "articles."
-    );
-
-    // Log the query in history
     await History.create({
       userId: req.session.user._id,
       action: "Searched news articles",
@@ -270,37 +261,18 @@ app.get("/search-news", isAuthenticated, async (req, res) => {
     res.render("api1", { articles: response.data.articles });
   } catch (error) {
     console.error("Primary API failed. Trying fallback API...", error.message);
-
     try {
       const fallbackResponse = await axios.get(
         `https://newsdata.io/api/1/news?apikey=${process.env.SECOND_NEWS_API_KEY}&q=${query}`
       );
 
-      console.log(
-        "Fallback API response received:",
-        fallbackResponse.data.results.length,
-        "articles."
-      );
-
-      // Filter and map the articles to the desired structure
-      const articles = fallbackResponse.data.results
-        .filter((article) => article.language === "en") // Ensure only English articles are included
-        .map((article) => ({
-          title: article.title,
-          description: article.description || "No description available.",
-          url: article.link,
-          publishedAt: article.pubDate,
-          source: { name: article.source_id || "Unknown Source" },
-        }));
-
-      // Log the query in history
       await History.create({
         userId: req.session.user._id,
         action: "Searched news articles using fallback API",
         input: query,
       });
 
-      res.render("api1", { articles });
+      res.render("api1", { articles: fallbackResponse.data.results }); // Adjusted for newsdata.io response
     } catch (fallbackError) {
       console.error("Both APIs failed:", fallbackError.message);
       res.status(500).send("Error fetching news articles");
@@ -309,10 +281,8 @@ app.get("/search-news", isAuthenticated, async (req, res) => {
 });
 
 app.get("/api1", isAuthenticated, async (req, res) => {
-  const query = "default"; // Default query for top headlines
+  const query = "default"; // Default value for fallback if query is not applicable
   try {
-    console.log("Fetching top headlines...");
-
     const response = await axios.get(
       `https://newsapi.org/v2/top-headlines?country=us&apiKey=${process.env.NEWS_API_KEY}`,
       {
@@ -323,15 +293,8 @@ app.get("/api1", isAuthenticated, async (req, res) => {
       }
     );
 
-    console.log(
-      "Primary API response received:",
-      response.data.articles.length,
-      "articles."
-    );
-
     const userId = req.session.user._id;
 
-    // Save articles in the database
     for (const article of response.data.articles) {
       await API1.create({
         title: article.title,
@@ -343,7 +306,6 @@ app.get("/api1", isAuthenticated, async (req, res) => {
       });
     }
 
-    // Log the action in history
     await History.create({
       userId,
       action: "Fetched top headlines from API1",
@@ -352,50 +314,30 @@ app.get("/api1", isAuthenticated, async (req, res) => {
     res.render("api1", { articles: response.data.articles });
   } catch (error) {
     console.error("Primary API failed. Trying fallback API...", error.message);
-
     try {
       const fallbackResponse = await axios.get(
         `https://newsdata.io/api/1/news?apikey=${process.env.SECOND_NEWS_API_KEY}&q=${query}`
       );
 
-      console.log(
-        "Fallback API response received:",
-        fallbackResponse.data.results.length,
-        "articles."
-      );
-
       const userId = req.session.user._id;
 
-      // Filter and map the articles to the desired structure
-      const articles = fallbackResponse.data.results
-        .filter((article) => article.language === "en") // Ensure only English articles are included
-        .map((article) => ({
-          title: article.title,
-          description: article.description || "No description available.",
-          url: article.link,
-          publishedAt: article.pubDate,
-          source: { name: article.source_id || "Unknown Source" },
-        }));
-
-      // Save articles in the database
-      for (const article of articles) {
+      for (const article of fallbackResponse.data.results) {
         await API1.create({
           title: article.title,
           description: article.description,
-          url: article.url,
-          publishedAt: article.publishedAt,
-          source: article.source.name,
+          url: article.link, // Adjusted for newsdata.io response
+          publishedAt: article.pubDate, // Adjusted for newsdata.io response
+          source: article.source_id, // Adjusted for newsdata.io response
           userId,
         });
       }
 
-      // Log the action in history
       await History.create({
         userId,
         action: "Fetched top headlines from fallback API",
       });
 
-      res.render("api1", { articles });
+      res.render("api1", { articles: fallbackResponse.data.results }); // Adjusted for newsdata.io response
     } catch (fallbackError) {
       console.error("Both APIs failed:", fallbackError.message);
       res.status(500).send("Error fetching news articles");
