@@ -271,13 +271,24 @@ app.get("/search-news", isAuthenticated, async (req, res) => {
         `https://newsdata.io/api/1/news?apikey=${process.env.SECOND_NEWS_API_KEY}&q=${query}`
       );
 
+      // Filter non-English articles
+      const articles = fallbackResponse.data.results
+        .filter((article) => article.language === "en")
+        .map((article) => ({
+          title: article.title,
+          description: article.description || "No description available.",
+          url: article.link,
+          publishedAt: article.pubDate,
+          source: { name: article.source_id || "Unknown Source" },
+        }));
+
       await History.create({
         userId: req.session.user._id,
         action: "Searched news articles using fallback API",
         input: query,
       });
 
-      res.render("api1", { articles: fallbackResponse.data.results }); // Adjusted for newsdata.io response
+      res.render("api1", { articles });
     } catch (fallbackError) {
       console.error("Both APIs failed:", fallbackError.message);
       res.status(500).send("Error fetching news articles");
@@ -325,13 +336,24 @@ app.get("/api1", isAuthenticated, async (req, res) => {
 
       const userId = req.session.user._id;
 
-      for (const article of fallbackResponse.data.results) {
+      // Filter non-English articles and map fields
+      const articles = fallbackResponse.data.results
+        .filter((article) => article.language === "en")
+        .map((article) => ({
+          title: article.title,
+          description: article.description || "No description available.",
+          url: article.link,
+          publishedAt: article.pubDate,
+          source: { name: article.source_id || "Unknown Source" },
+        }));
+
+      for (const article of articles) {
         await API1.create({
           title: article.title,
           description: article.description,
-          url: article.link, // Adjusted for newsdata.io response
-          publishedAt: article.pubDate, // Adjusted for newsdata.io response
-          source: article.source_id, // Adjusted for newsdata.io response
+          url: article.url,
+          publishedAt: article.publishedAt,
+          source: article.source.name,
           userId,
         });
       }
@@ -341,16 +363,13 @@ app.get("/api1", isAuthenticated, async (req, res) => {
         action: "Fetched top headlines from fallback API",
       });
 
-      res.render("api1", { articles: fallbackResponse.data.results }); // Adjusted for newsdata.io response
+      res.render("api1", { articles });
     } catch (fallbackError) {
       console.error("Both APIs failed:", fallbackError.message);
       res.status(500).send("Error fetching news articles");
     }
   }
 });
-
-
-
 
 app.get("/api2", isAuthenticated, (req, res) => {
   res.render("api2", { quotes: [] });
