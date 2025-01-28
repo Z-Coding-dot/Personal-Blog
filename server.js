@@ -6,7 +6,7 @@ const bodyParser = require("body-parser");
 const path = require("path");
 const axios = require("axios");
 const bcrypt = require("bcrypt");
-const https = require("https"); 
+const https = require("https");
 const flash = require("connect-flash");
 
 dotenv.config();
@@ -60,8 +60,6 @@ const userSchema = new mongoose.Schema({
   updatedAt: Date,
   deletedAt: Date,
 });
-
-
 
 const api1Schema = new mongoose.Schema({
   title: String,
@@ -152,7 +150,6 @@ app.post("/signup", async (req, res) => {
   }
 });
 
-
 app.get("/main", isAuthenticated, (req, res) => {
   res.render("main", { username: req.session.user.username });
 });
@@ -181,7 +178,6 @@ app.get("/admin", isAuthenticated, async (req, res) => {
     res.status(500).send("Internal Server Error");
   }
 });
-
 
 app.post("/admin/add", isAuthenticated, async (req, res) => {
   console.log(req.body); // Log the request body to debug issues
@@ -218,8 +214,6 @@ app.post("/admin/add", isAuthenticated, async (req, res) => {
   }
 });
 
-
-
 app.post("/admin/edit/:id", async (req, res) => {
   const { id } = req.params;
   const { username, isAdmin } = req.body;
@@ -248,15 +242,25 @@ app.post("/admin/delete/:id", async (req, res) => {
 app.get("/search-news", isAuthenticated, async (req, res) => {
   const query = req.query.query || "default"; // Default value for query if undefined
   try {
+    console.log("Searching news for query:", query);
+
     const response = await axios.get(
       `https://newsapi.org/v2/everything?q=${query}&apiKey=${process.env.NEWS_API_KEY}`,
       {
         headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
         },
       }
     );
 
+    console.log(
+      "Primary API response received:",
+      response.data.articles.length,
+      "articles."
+    );
+
+    // Log the query in history
     await History.create({
       userId: req.session.user._id,
       action: "Searched news articles",
@@ -266,14 +270,21 @@ app.get("/search-news", isAuthenticated, async (req, res) => {
     res.render("api1", { articles: response.data.articles });
   } catch (error) {
     console.error("Primary API failed. Trying fallback API...", error.message);
+
     try {
       const fallbackResponse = await axios.get(
         `https://newsdata.io/api/1/news?apikey=${process.env.SECOND_NEWS_API_KEY}&q=${query}`
       );
 
-      // Filter non-English articles
+      console.log(
+        "Fallback API response received:",
+        fallbackResponse.data.results.length,
+        "articles."
+      );
+
+      // Filter and map the articles to the desired structure
       const articles = fallbackResponse.data.results
-        .filter((article) => article.language === "en")
+        .filter((article) => article.language === "en") // Ensure only English articles are included
         .map((article) => ({
           title: article.title,
           description: article.description || "No description available.",
@@ -282,6 +293,7 @@ app.get("/search-news", isAuthenticated, async (req, res) => {
           source: { name: article.source_id || "Unknown Source" },
         }));
 
+      // Log the query in history
       await History.create({
         userId: req.session.user._id,
         action: "Searched news articles using fallback API",
@@ -297,19 +309,29 @@ app.get("/search-news", isAuthenticated, async (req, res) => {
 });
 
 app.get("/api1", isAuthenticated, async (req, res) => {
-  const query = "default"; // Default value for fallback if query is not applicable
+  const query = "default"; // Default query for top headlines
   try {
+    console.log("Fetching top headlines...");
+
     const response = await axios.get(
       `https://newsapi.org/v2/top-headlines?country=us&apiKey=${process.env.NEWS_API_KEY}`,
       {
         headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
         },
       }
     );
 
+    console.log(
+      "Primary API response received:",
+      response.data.articles.length,
+      "articles."
+    );
+
     const userId = req.session.user._id;
 
+    // Save articles in the database
     for (const article of response.data.articles) {
       await API1.create({
         title: article.title,
@@ -321,6 +343,7 @@ app.get("/api1", isAuthenticated, async (req, res) => {
       });
     }
 
+    // Log the action in history
     await History.create({
       userId,
       action: "Fetched top headlines from API1",
@@ -329,16 +352,23 @@ app.get("/api1", isAuthenticated, async (req, res) => {
     res.render("api1", { articles: response.data.articles });
   } catch (error) {
     console.error("Primary API failed. Trying fallback API...", error.message);
+
     try {
       const fallbackResponse = await axios.get(
         `https://newsdata.io/api/1/news?apikey=${process.env.SECOND_NEWS_API_KEY}&q=${query}`
       );
 
+      console.log(
+        "Fallback API response received:",
+        fallbackResponse.data.results.length,
+        "articles."
+      );
+
       const userId = req.session.user._id;
 
-      // Filter non-English articles and map fields
+      // Filter and map the articles to the desired structure
       const articles = fallbackResponse.data.results
-        .filter((article) => article.language === "en")
+        .filter((article) => article.language === "en") // Ensure only English articles are included
         .map((article) => ({
           title: article.title,
           description: article.description || "No description available.",
@@ -347,6 +377,7 @@ app.get("/api1", isAuthenticated, async (req, res) => {
           source: { name: article.source_id || "Unknown Source" },
         }));
 
+      // Save articles in the database
       for (const article of articles) {
         await API1.create({
           title: article.title,
@@ -358,6 +389,7 @@ app.get("/api1", isAuthenticated, async (req, res) => {
         });
       }
 
+      // Log the action in history
       await History.create({
         userId,
         action: "Fetched top headlines from fallback API",
