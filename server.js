@@ -376,16 +376,16 @@ app.get("/api1", isAuthenticated, async (req, res) => {
     }
 
     // 🔹 Fetch top headlines
-    const response = await axios.get(`https://newsapi.org/v2/top-headlines`, {
+    const response = await axios.get("https://newsapi.org/v2/top-headlines", {
       params: {
         country: "us",
         apiKey: process.env.NEWS_API_KEY,
       },
       headers: {
-        "User-Agent": "Mozilla/5.0",
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
       },
     });
-
     const userId = req.session.user._id;
 
     // 🔹 Store unique articles in DB (Prevent duplicates)
