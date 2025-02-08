@@ -315,11 +315,14 @@ app.get("/search-news", isAuthenticated, async (req, res) => {
       translatedQuery = translatedText.text;
     }
 
-    // 🔹 Fetch news articles
+    // 🔹 Fetch news articles from NewsAPI
     const response = await axios.get(`https://newsapi.org/v2/everything`, {
       params: {
         q: encodeURIComponent(translatedQuery),
         apiKey: process.env.NEWS_API_KEY,
+      },
+      headers: {
+        "User-Agent": "Mozilla/5.0", // Prevent Cloudflare block
       },
     });
 
@@ -359,11 +362,28 @@ app.get("/search-news", isAuthenticated, async (req, res) => {
 
     res.render("api1", { articles, currentLocale: targetLanguage });
   } catch (error) {
-    console.error(
-      "Error fetching news:",
-      error.response?.data || error.message
-    );
-    res.render("api1", { articles: [], currentLocale: targetLanguage });
+    console.error("NewsAPI failed! Switching to fallback API...");
+
+    try {
+      if (!process.env.SECOND_NEWS_API_KEY) {
+        throw new Error("Missing Fallback News API Key");
+      }
+
+      const fallbackResponse = await axios.get("https://newsdata.io/api/1/news", {
+        params: {
+          apikey: process.env.SECOND_NEWS_API_KEY,
+          q: userQuery,
+        },
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+        },
+      });
+
+      res.render("api1", { articles: fallbackResponse.data.results, currentLocale: targetLanguage });
+    } catch (fallbackError) {
+      console.error("Both APIs failed:", fallbackError.message);
+      res.render("api1", { articles: [], currentLocale: targetLanguage });
+    }
   }
 });
 
@@ -382,10 +402,10 @@ app.get("/api1", isAuthenticated, async (req, res) => {
         apiKey: process.env.NEWS_API_KEY,
       },
       headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "User-Agent": "Mozilla/5.0",
       },
     });
+
     const userId = req.session.user._id;
 
     // 🔹 Store unique articles in DB (Prevent duplicates)
@@ -414,10 +434,7 @@ app.get("/api1", isAuthenticated, async (req, res) => {
       currentLocale: req.getLocale(),
     });
   } catch (error) {
-    console.error(
-      "Primary API failed. Trying fallback API...",
-      error.response?.data || error.message
-    );
+    console.error("Primary API failed. Trying fallback API...");
 
     try {
       // 🔹 Ensure Fallback API Key is Set
@@ -425,15 +442,12 @@ app.get("/api1", isAuthenticated, async (req, res) => {
         throw new Error("Missing Fallback News API Key");
       }
 
-      const fallbackResponse = await axios.get(
-        `https://newsdata.io/api/1/news`,
-        {
-          params: {
-            apikey: process.env.SECOND_NEWS_API_KEY,
-            q: "default",
-          },
-        }
-      );
+      const fallbackResponse = await axios.get("https://newsdata.io/api/1/news", {
+        params: {
+          apikey: process.env.SECOND_NEWS_API_KEY,
+          q: "default",
+        },
+      });
 
       const userId = req.session.user._id;
 
@@ -461,10 +475,11 @@ app.get("/api1", isAuthenticated, async (req, res) => {
       res.render("api1", { articles: fallbackResponse.data.results });
     } catch (fallbackError) {
       console.error("Both APIs failed:", fallbackError.message);
-      res.status(500).send("Error fetching news articles");
+      res.status(500).send("Error fetching news articles.");
     }
   }
 });
+
 
 // Route to render joke search page
 app.get("/api2", isAuthenticated, async (req, res) => {
