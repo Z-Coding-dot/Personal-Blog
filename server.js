@@ -11,7 +11,6 @@ const i18n = require("i18n");
 const cookieParser = require("cookie-parser");
 const translate = require("google-translate-api-x");
 
-
 dotenv.config();
 const app = express();
 const PORT = 3000;
@@ -45,7 +44,6 @@ i18n.configure({
   syncFiles: true,
 });
 app.use(i18n.init);
-
 
 // Language Middleware
 app.use((req, res, next) => {
@@ -207,12 +205,12 @@ app.get("/history", isAuthenticated, async (req, res) => {
       .sort({ date: -1 })
       .limit(10); // Show last 10 searches
 
-    const jokeHistory = await History.find({ 
-      userId: req.session.user._id, 
-      action: "searched_joke" 
+    const jokeHistory = await History.find({
+      userId: req.session.user._id,
+      action: "searched_joke",
     })
-    .sort({ date: -1 })
-    .limit(10); // Show last 10 joke searches
+      .sort({ date: -1 })
+      .limit(10); // Show last 10 joke searches
 
     res.render("history", {
       username: req.session.user.username,
@@ -224,7 +222,6 @@ app.get("/history", isAuthenticated, async (req, res) => {
     res.status(500).send("Internal Server Error");
   }
 });
-
 
 app.get("/admin", isAuthenticated, async (req, res) => {
   if (!req.session.user || !req.session.user.isAdmin) {
@@ -300,39 +297,42 @@ app.post("/admin/delete/:id", async (req, res) => {
 });
 
 ///////////////////// Search News //////////////////////😎😎😎😎
-
+// ✅ Search News Route (User Query)
 app.get("/search-news", isAuthenticated, async (req, res) => {
-  const userQuery = req.query.query || "default";
+  const userQuery = req.query.query || "latest";
   const targetLanguage = req.getLocale();
   let translatedQuery = userQuery;
 
   try {
-    // Translate query to English if it's not already English
+    // 🔹 Ensure API Key is Set
+    if (!process.env.NEWS_API_KEY) {
+      throw new Error("Missing News API Key");
+    }
+
+    // 🔹 Translate query if needed
     if (targetLanguage !== "en") {
       const translatedText = await translate(userQuery, { to: "en" });
       translatedQuery = translatedText.text;
     }
 
-    // Fetch news articles
-    const response = await axios.get(
-      `https://newsapi.org/v2/everything?q=${encodeURIComponent(
-        translatedQuery
-      )}&apiKey=${process.env.NEWS_API_KEY}`
-    );
+    // 🔹 Fetch news articles
+    const response = await axios.get(`https://newsapi.org/v2/everything`, {
+      params: {
+        q: encodeURIComponent(translatedQuery),
+        apiKey: process.env.NEWS_API_KEY,
+      },
+    });
 
     let articles = response.data.articles || [];
     if (!articles.length) throw new Error("No results from NewsAPI");
 
-    // Translate articles into user's language
+    // 🔹 Translate articles into user's language
     articles = await Promise.all(
       articles.map(async (article) => {
         const titleText = article.title || "No title available";
         let descText = article.description || "No description available";
 
-        // Ensure valid description (prevent empty strings)
-        if (!descText.trim()) {
-          descText = "No description available";
-        }
+        if (!descText.trim()) descText = "No description available";
 
         const titleTrans = await translate(titleText, { to: targetLanguage });
         const descTrans = await translate(descText, { to: targetLanguage });
@@ -348,48 +348,62 @@ app.get("/search-news", isAuthenticated, async (req, res) => {
       })
     );
 
-    // ✅ Save user search in history, including results
+    // ✅ Save user search in history (Store only top 3 results to avoid excessive storage)
     await History.create({
       userId: req.session.user._id,
       action: "Searched for news",
       input: userQuery,
       date: new Date(),
-      results: articles.slice(0, 3), // ✅ Save only top 3 results to avoid excessive storage
+      results: articles.slice(0, 3),
     });
 
     res.render("api1", { articles, currentLocale: targetLanguage });
   } catch (error) {
-    console.error("Error fetching news:", error.message);
+    console.error(
+      "Error fetching news:",
+      error.response?.data || error.message
+    );
     res.render("api1", { articles: [], currentLocale: targetLanguage });
   }
 });
 
-// Fetching Top Headlines
+// ✅ Fetching Top Headlines
 app.get("/api1", isAuthenticated, async (req, res) => {
-  const query = "default"; 
   try {
-    const response = await axios.get(
-      `https://newsapi.org/v2/top-headlines?country=us&apiKey=${process.env.NEWS_API_KEY}`,
-      {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        },
-      }
-    );
+    // 🔹 Ensure API Key is Set
+    if (!process.env.NEWS_API_KEY) {
+      throw new Error("Missing News API Key");
+    }
+
+    // 🔹 Fetch top headlines
+    const response = await axios.get(`https://newsapi.org/v2/top-headlines`, {
+      params: {
+        country: "us",
+        apiKey: process.env.NEWS_API_KEY,
+      },
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+      },
+    });
 
     const userId = req.session.user._id;
 
+    // 🔹 Store unique articles in DB (Prevent duplicates)
     for (const article of response.data.articles) {
-      await API1.create({
-        title: article.title,
-        description: article.description || "No description available",
-        url: article.url,
-        publishedAt: article.publishedAt,
-        source: article.source.name,
-        userId,
-      });
+      const existingArticle = await API1.findOne({ title: article.title });
+      if (!existingArticle) {
+        await API1.create({
+          title: article.title,
+          description: article.description || "No description available",
+          url: article.url,
+          publishedAt: article.publishedAt,
+          source: article.source.name,
+          userId,
+        });
+      }
     }
 
+    // 🔹 Store API Call in History
     await History.create({
       userId,
       action: "Fetched top headlines from API1",
@@ -400,25 +414,45 @@ app.get("/api1", isAuthenticated, async (req, res) => {
       currentLocale: req.getLocale(),
     });
   } catch (error) {
-    console.error("Primary API failed. Trying fallback API...", error.message);
+    console.error(
+      "Primary API failed. Trying fallback API...",
+      error.response?.data || error.message
+    );
+
     try {
+      // 🔹 Ensure Fallback API Key is Set
+      if (!process.env.SECOND_NEWS_API_KEY) {
+        throw new Error("Missing Fallback News API Key");
+      }
+
       const fallbackResponse = await axios.get(
-        `https://newsdata.io/api/1/news?apikey=${process.env.SECOND_NEWS_API_KEY}&q=${query}`
+        `https://newsdata.io/api/1/news`,
+        {
+          params: {
+            apikey: process.env.SECOND_NEWS_API_KEY,
+            q: "default",
+          },
+        }
       );
 
       const userId = req.session.user._id;
 
+      // 🔹 Store unique fallback articles in DB
       for (const article of fallbackResponse.data.results) {
-        await API1.create({
-          title: article.title,
-          description: article.description || "No description available",
-          url: article.link,
-          publishedAt: article.pubDate,
-          source: article.source_id,
-          userId,
-        });
+        const existingArticle = await API1.findOne({ title: article.title });
+        if (!existingArticle) {
+          await API1.create({
+            title: article.title,
+            description: article.description || "No description available",
+            url: article.link,
+            publishedAt: article.pubDate,
+            source: article.source_id,
+            userId,
+          });
+        }
       }
 
+      // 🔹 Store API Call in History
       await History.create({
         userId,
         action: "Fetched top headlines from fallback API",
@@ -431,9 +465,6 @@ app.get("/api1", isAuthenticated, async (req, res) => {
     }
   }
 });
- 
-
-
 
 // Route to render joke search page
 app.get("/api2", isAuthenticated, async (req, res) => {
@@ -468,7 +499,9 @@ app.get("/search-jokes", isAuthenticated, async (req, res) => {
   const targetLanguage = req.query.language_code || "en"; // Default to English
 
   try {
-    console.log(`User search query: ${userQuery} (Target Language: ${targetLanguage})`);
+    console.log(
+      `User search query: ${userQuery} (Target Language: ${targetLanguage})`
+    );
 
     // Step 1: Translate the query to English if it's not already in English
     if (targetLanguage !== "en") {
@@ -479,7 +512,9 @@ app.get("/search-jokes", isAuthenticated, async (req, res) => {
 
     // Step 2: Fetch jokes using the translated query
     const response = await axios.get(
-      `https://api.chucknorris.io/jokes/search?query=${encodeURIComponent(userQuery)}`
+      `https://api.chucknorris.io/jokes/search?query=${encodeURIComponent(
+        userQuery
+      )}`
     );
 
     console.log("API Response:", response.data);
@@ -492,7 +527,9 @@ app.get("/search-jokes", isAuthenticated, async (req, res) => {
       jokes.map(async (joke) => {
         if (targetLanguage !== "en") {
           try {
-            const translatedJoke = await translate(joke.value, { to: targetLanguage });
+            const translatedJoke = await translate(joke.value, {
+              to: targetLanguage,
+            });
             return { joke: translatedJoke.text, category: "Chuck Norris" };
           } catch (err) {
             console.error("Translation error:", err.message);
@@ -536,10 +573,14 @@ app.get("/search-jokes", isAuthenticated, async (req, res) => {
     res.render("api2", { jokes, history, user: req.session.user });
   } catch (error) {
     console.error("Error fetching jokes:", error.message);
-    res.render("api2", { jokes: [], history: [], error: "Error fetching jokes", user: req.session.user });
+    res.render("api2", {
+      jokes: [],
+      history: [],
+      error: "Error fetching jokes",
+      user: req.session.user,
+    });
   }
 });
-
 
 app.use(express.static(path.join(__dirname, "public")));
 
@@ -547,13 +588,17 @@ app.use(express.static(path.join(__dirname, "public")));
 app.post("/admin/item/add", isAuthenticated, async (req, res) => {
   if (!req.session.user.isAdmin) return res.status(403).send("Access denied");
 
-  const { pictures, name_en, name_local, description_en, description_local } = req.body;
+  const { pictures, name_en, name_local, description_en, description_local } =
+    req.body;
 
   try {
     // Validate and ensure pictures is an array of valid URLs
     const validatedPictures = Array.isArray(pictures)
       ? pictures.filter(isValidURL)
-      : pictures.split(",").map((pic) => pic.trim()).filter(isValidURL);
+      : pictures
+          .split(",")
+          .map((pic) => pic.trim())
+          .filter(isValidURL);
 
     const newItem = new Item({
       pictures: validatedPictures,
@@ -576,13 +621,17 @@ app.post("/admin/item/add", isAuthenticated, async (req, res) => {
 app.put("/admin/item/edit/:id", isAuthenticated, async (req, res) => {
   if (!req.session.user.isAdmin) return res.status(403).send("Access denied");
 
-  const { name_en, name_local, description_en, description_local, pictures } = req.body;
+  const { name_en, name_local, description_en, description_local, pictures } =
+    req.body;
 
   try {
     // Validate and ensure pictures is an array of valid URLs
     const validatedPictures = Array.isArray(pictures)
       ? pictures.filter(isValidURL)
-      : pictures.split(",").map((pic) => pic.trim()).filter(isValidURL);
+      : pictures
+          .split(",")
+          .map((pic) => pic.trim())
+          .filter(isValidURL);
 
     await Item.findByIdAndUpdate(req.params.id, {
       $set: {
@@ -649,7 +698,6 @@ function isValidURL(url) {
     return false;
   }
 }
-
 
 app.listen(PORT, () =>
   console.log(`Server is running on http://localhost:${PORT}`)
