@@ -14,7 +14,7 @@ const translate = require("google-translate-api-x");
 
 dotenv.config();
 const app = express();
-const PORT = 3000;
+const PORT = 3001;
 
 const httpsAgent = new https.Agent({
   rejectUnauthorized: false,
@@ -303,31 +303,40 @@ app.post("/admin/delete/:id", async (req, res) => {
 });
 
 ///////////////////// Search News //////////////////////😎😎😎😎
-// ✅ Search News Route (User Query)
+
+// ✅ Route: Search News (User Query)
 app.get("/search-news", isAuthenticated, async (req, res) => {
   const userQuery = req.query.query || "latest";
-  const targetLanguage = req.getLocale();
+  let targetLanguage = req.headers["accept-language"]?.split(",")[0] || "en";
+
+  // ✅ Ensure only "en", "fa", "ru", etc. (remove "-US", "-IR", "-RU")
+  targetLanguage = targetLanguage.split("-")[0];
+
   let translatedQuery = userQuery;
 
   try {
-    if (!process.env.NEWS_API_KEY) {
-      console.error("❌ ERROR: Missing News API Key");
-      return res.status(500).send("News API key is missing. Contact support.");
-    }
+    console.log("🔹 Selected Language:", targetLanguage);
+    console.log(
+      "🔹 NEWS_API_KEY:",
+      process.env.NEWS_API_KEY ? "✅ Exists" : "❌ Missing"
+    );
 
-    // 🔹 Translate query if needed
+    // 🔹 Translate query if needed (Only if NOT in English)
     if (targetLanguage !== "en") {
       console.log("🔹 Translating query from", targetLanguage, "to English...");
-      const translatedText = await translate(userQuery, { to: "en" });
+      const translatedText = await translate(userQuery, {
+        to: "en",
+        forceTo: true, // Ensures non-English languages are translated
+      });
       translatedQuery = translatedText.text;
-      console.log("✅ Translated Query:", translatedQuery);
+      console.log("✅ Translated Query to English:", translatedQuery);
     }
 
     console.log("🔹 Fetching NewsAPI for query:", translatedQuery);
 
-    const response = await axios.get(`https://newsapi.org/v2/everything`, {
+    const response = await axios.get("https://newsapi.org/v2/everything", {
       params: {
-        q: encodeURIComponent(translatedQuery),
+        q: translatedQuery,
         apiKey: process.env.NEWS_API_KEY,
       },
       headers: { "User-Agent": "Mozilla/5.0" },
@@ -340,28 +349,41 @@ app.get("/search-news", isAuthenticated, async (req, res) => {
 
     let articles = response.data.articles;
 
-    // 🔹 Translate articles into user's language
-    articles = await Promise.all(
-      articles.map(async (article) => {
-        const titleText = article.title || "No title available";
-        let descText = article.description || "No description available";
-        if (!descText.trim()) descText = "No description available";
+    // 🔹 Translate articles into user's selected language
+    if (targetLanguage !== "en") {
+      console.log("🔹 Translating articles to", targetLanguage, "...");
 
-        const titleTrans = await translate(titleText, { to: targetLanguage });
-        const descTrans = await translate(descText, { to: targetLanguage });
+      articles = await Promise.all(
+        articles.map(async (article) => {
+          const titleText = article.title || "No title available";
+          let descText = article.description || "No description available";
+          if (!descText.trim()) descText = "No description available";
 
-        return {
-          title: titleTrans.text,
-          description: descTrans.text.trim() || "No description available",
-          url: article.url,
-          urlToImage: article.urlToImage || "/default-image.jpg",
-          source: article.source?.name || "Unknown Source",
-          publishedAt: article.publishedAt,
-        };
-      })
-    );
+          // ✅ Translate titles and descriptions to user’s language
+          const titleTrans = await translate(titleText, {
+            to: targetLanguage,
+            forceTo: true,
+          });
+          const descTrans = await translate(descText, {
+            to: targetLanguage,
+            forceTo: true,
+          });
 
-    console.log("✅ Successfully fetched and translated", articles.length, "articles.");
+          return {
+            title: titleTrans.text,
+            description: descTrans.text.trim() || "No description available",
+            url: article.url,
+            urlToImage: article.urlToImage || "/default-image.jpg",
+            source: article.source?.name || "Unknown Source",
+            publishedAt: article.publishedAt,
+          };
+        })
+      );
+
+      console.log("✅ Successfully translated articles to", targetLanguage);
+    }
+
+    console.log("✅ Successfully fetched", articles.length, "articles.");
 
     // ✅ Save user search in history (Store only top 3 results)
     await History.create({
@@ -383,46 +405,93 @@ app.get("/search-news", isAuthenticated, async (req, res) => {
     }
 
     try {
-      console.log("🔹 Switching to Fallback API (NewsData.io)...");
+      console.log("🔹 Fetching from Fallback API (NewsData.io)...");
 
       const fallbackResponse = await axios.get(
         "https://newsdata.io/api/1/news",
         {
           params: {
             apikey: process.env.SECOND_NEWS_API_KEY,
-            q: userQuery,
+            q: "default",
           },
           headers: { "User-Agent": "Mozilla/5.0" },
         }
       );
 
-      console.log("✅ Fallback API Response Status:", fallbackResponse.status);
+      console.log("✅ Fallback API Response:", fallbackResponse.status);
 
-      if (!fallbackResponse.data.results || fallbackResponse.data.results.length === 0) {
-        throw new Error("No news articles found in fallback API.");
+      if (
+        !fallbackResponse.data.results ||
+        fallbackResponse.data.results.length === 0
+      ) {
+        console.error("❌ No results from Fallback API");
+        return res.status(404).send("No news articles found in fallback API.");
+      }
+
+      // ✅ Translate fallback articles if needed
+      let fallbackArticles = fallbackResponse.data.results;
+      if (targetLanguage !== "en") {
+        console.log(
+          "🔹 Translating fallback articles to",
+          targetLanguage,
+          "..."
+        );
+
+        fallbackArticles = await Promise.all(
+          fallbackArticles.map(async (article) => {
+            const titleText = article.title || "No title available";
+            let descText = article.description || "No description available";
+            if (!descText.trim()) descText = "No description available";
+
+            const titleTrans = await translate(titleText, {
+              to: targetLanguage,
+              forceTo: true,
+            });
+            const descTrans = await translate(descText, {
+              to: targetLanguage,
+              forceTo: true,
+            });
+
+            return {
+              title: titleTrans.text,
+              description: descTrans.text.trim() || "No description available",
+              url: article.link,
+              urlToImage: article.image_url || "/default-image.jpg",
+              source: article.source_id || "Unknown Source",
+              publishedAt: article.pubDate,
+            };
+          })
+        );
+
+        console.log(
+          "✅ Successfully translated fallback articles to",
+          targetLanguage
+        );
       }
 
       res.render("api1", {
-        articles: fallbackResponse.data.results,
+        articles: fallbackArticles,
         currentLocale: targetLanguage,
       });
     } catch (fallbackError) {
-      console.error("❌ Both APIs failed:", fallbackError.message);
-      res.status(500).send("❌ Internal Server Error. No news available.");
+      console.error(
+        "❌ Fallback API Request Failed:",
+        fallbackError.response?.data || fallbackError.message
+      );
+      res.status(500).send("Error fetching news articles.");
     }
   }
 });
 
-
-
-// ✅ Fetching Top Headlines
+// ✅ Route: Fetching Top Headlines
 app.get("/api1", isAuthenticated, async (req, res) => {
+  const targetLanguage = req.headers["accept-language"]?.split(",")[0] || "en";
+
   try {
-    // 🔹 Ensure API Key is Set
-    if (!process.env.NEWS_API_KEY) {
-      console.error("❌ ERROR: Missing News API Key");
-      return res.status(500).send("News API key is missing. Contact support.");
-    }
+    console.log(
+      "🔹 NEWS_API_KEY:",
+      process.env.NEWS_API_KEY ? "✅ Exists" : "❌ Missing"
+    );
 
     // 🔹 Fetch top headlines
     const response = await axios.get("https://newsapi.org/v2/top-headlines", {
@@ -441,19 +510,15 @@ app.get("/api1", isAuthenticated, async (req, res) => {
     const userId = req.session.user._id;
 
     // 🔹 Store unique articles in DB (Prevent duplicates)
-    for (const article of response.data.articles) {
-      const existingArticle = await API1.findOne({ title: article.title });
-      if (!existingArticle) {
-        await API1.create({
-          title: article.title,
-          description: article.description || "No description available",
-          url: article.url,
-          publishedAt: article.publishedAt,
-          source: article.source.name,
-          userId,
-        });
-      }
-    }
+    const articlesToInsert = response.data.articles.map((article) => ({
+      title: article.title,
+      description: article.description || "No description available",
+      url: article.url,
+      publishedAt: article.publishedAt,
+      source: article.source.name,
+      userId,
+    }));
+    await API1.insertMany(articlesToInsert, { ordered: false }).catch(() => {});
 
     // 🔹 Store API Call in History
     await History.create({
@@ -462,8 +527,8 @@ app.get("/api1", isAuthenticated, async (req, res) => {
     });
 
     res.render("api1", {
-      articles: response.data.articles,
-      currentLocale: req.getLocale(),
+      articles: response.data.articles || [],
+      currentLocale: targetLanguage,
     });
   } catch (error) {
     console.error("Primary API failed. Trying fallback API...", error.message);
@@ -474,6 +539,8 @@ app.get("/api1", isAuthenticated, async (req, res) => {
     }
 
     try {
+      console.log("🔹 Fetching from Fallback API (NewsData.io)...");
+
       const fallbackResponse = await axios.get(
         "https://newsdata.io/api/1/news",
         {
@@ -485,35 +552,29 @@ app.get("/api1", isAuthenticated, async (req, res) => {
         }
       );
 
-      const userId = req.session.user._id;
+      console.log("✅ Fallback API Response:", fallbackResponse.status);
 
-      for (const article of fallbackResponse.data.results) {
-        const existingArticle = await API1.findOne({ title: article.title });
-        if (!existingArticle) {
-          await API1.create({
-            title: article.title,
-            description: article.description || "No description available",
-            url: article.link,
-            publishedAt: article.pubDate,
-            source: article.source_id,
-            userId,
-          });
-        }
+      if (
+        !fallbackResponse.data.results ||
+        fallbackResponse.data.results.length === 0
+      ) {
+        console.error("❌ No results from Fallback API");
+        return res.status(404).send("No news articles found in fallback API.");
       }
 
-      await History.create({
-        userId,
-        action: "Fetched top headlines from fallback API",
+      res.render("api1", {
+        articles: fallbackResponse.data.results,
+        currentLocale: targetLanguage,
       });
-
-      res.render("api1", { articles: fallbackResponse.data.results });
     } catch (fallbackError) {
-      console.error("Both APIs failed:", fallbackError.message);
+      console.error(
+        "❌ Fallback API Request Failed:",
+        fallbackError.response?.data || fallbackError.message
+      );
       res.status(500).send("Error fetching news articles.");
     }
   }
 });
-
 
 // Route to render joke search page
 app.get("/api2", isAuthenticated, async (req, res) => {
