@@ -312,7 +312,7 @@ app.get("/search-news", isAuthenticated, async (req, res) => {
   try {
     if (!process.env.NEWS_API_KEY) {
       console.error("❌ ERROR: Missing News API Key");
-      throw new Error("Missing News API Key");
+      return res.status(500).send("News API key is missing. Contact support.");
     }
 
     // 🔹 Translate query if needed
@@ -330,24 +330,21 @@ app.get("/search-news", isAuthenticated, async (req, res) => {
         q: encodeURIComponent(translatedQuery),
         apiKey: process.env.NEWS_API_KEY,
       },
-      headers: { "User-Agent": "Mozilla/5.0" }, // Prevent Cloudflare block
+      headers: { "User-Agent": "Mozilla/5.0" },
     });
 
-    console.log("✅ NewsAPI Response Status:", response.status);
-    console.log("✅ NewsAPI Response Data:", response.data);
-
-    let articles = response.data.articles || [];
-    if (!articles.length) {
+    if (!response.data.articles || response.data.articles.length === 0) {
       console.error("❌ No results from NewsAPI");
       throw new Error("No results from NewsAPI");
     }
+
+    let articles = response.data.articles;
 
     // 🔹 Translate articles into user's language
     articles = await Promise.all(
       articles.map(async (article) => {
         const titleText = article.title || "No title available";
         let descText = article.description || "No description available";
-
         if (!descText.trim()) descText = "No description available";
 
         const titleTrans = await translate(titleText, { to: targetLanguage });
@@ -364,11 +361,7 @@ app.get("/search-news", isAuthenticated, async (req, res) => {
       })
     );
 
-    console.log(
-      "✅ Successfully fetched and translated",
-      articles.length,
-      "articles."
-    );
+    console.log("✅ Successfully fetched and translated", articles.length, "articles.");
 
     // ✅ Save user search in history (Store only top 3 results)
     await History.create({
@@ -383,12 +376,13 @@ app.get("/search-news", isAuthenticated, async (req, res) => {
   } catch (error) {
     console.error("❌ NewsAPI failed! Error:", error.message);
 
-    try {
-      if (!process.env.SECOND_NEWS_API_KEY) {
-        console.error("❌ ERROR: Missing Fallback News API Key");
-        throw new Error("Missing Fallback News API Key");
-      }
+    // 🔹 Fallback API (NewsData.io)
+    if (!process.env.SECOND_NEWS_API_KEY) {
+      console.error("❌ ERROR: Missing Fallback News API Key");
+      return res.status(500).send("News API unavailable. Try again later.");
+    }
 
+    try {
       console.log("🔹 Switching to Fallback API (NewsData.io)...");
 
       const fallbackResponse = await axios.get(
@@ -403,7 +397,10 @@ app.get("/search-news", isAuthenticated, async (req, res) => {
       );
 
       console.log("✅ Fallback API Response Status:", fallbackResponse.status);
-      console.log("✅ Fallback API Response Data:", fallbackResponse.data);
+
+      if (!fallbackResponse.data.results || fallbackResponse.data.results.length === 0) {
+        throw new Error("No news articles found in fallback API.");
+      }
 
       res.render("api1", {
         articles: fallbackResponse.data.results,
@@ -416,12 +413,15 @@ app.get("/search-news", isAuthenticated, async (req, res) => {
   }
 });
 
+
+
 // ✅ Fetching Top Headlines
 app.get("/api1", isAuthenticated, async (req, res) => {
   try {
     // 🔹 Ensure API Key is Set
     if (!process.env.NEWS_API_KEY) {
-      throw new Error("Missing News API Key");
+      console.error("❌ ERROR: Missing News API Key");
+      return res.status(500).send("News API key is missing. Contact support.");
     }
 
     // 🔹 Fetch top headlines
@@ -430,10 +430,13 @@ app.get("/api1", isAuthenticated, async (req, res) => {
         country: "us",
         apiKey: process.env.NEWS_API_KEY,
       },
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-      },
+      headers: { "User-Agent": "Mozilla/5.0" },
     });
+
+    if (!response.data.articles || response.data.articles.length === 0) {
+      console.error("❌ No results from NewsAPI");
+      throw new Error("No results from NewsAPI");
+    }
 
     const userId = req.session.user._id;
 
@@ -463,14 +466,14 @@ app.get("/api1", isAuthenticated, async (req, res) => {
       currentLocale: req.getLocale(),
     });
   } catch (error) {
-    console.error("Primary API failed. Trying fallback API...");
+    console.error("Primary API failed. Trying fallback API...", error.message);
+
+    if (!process.env.SECOND_NEWS_API_KEY) {
+      console.error("❌ ERROR: Missing Fallback News API Key");
+      return res.status(500).send("News API unavailable. Try again later.");
+    }
 
     try {
-      // 🔹 Ensure Fallback API Key is Set
-      if (!process.env.SECOND_NEWS_API_KEY) {
-        throw new Error("Missing Fallback News API Key");
-      }
-
       const fallbackResponse = await axios.get(
         "https://newsdata.io/api/1/news",
         {
@@ -478,12 +481,12 @@ app.get("/api1", isAuthenticated, async (req, res) => {
             apikey: process.env.SECOND_NEWS_API_KEY,
             q: "default",
           },
+          headers: { "User-Agent": "Mozilla/5.0" },
         }
       );
 
       const userId = req.session.user._id;
 
-      // 🔹 Store unique fallback articles in DB
       for (const article of fallbackResponse.data.results) {
         const existingArticle = await API1.findOne({ title: article.title });
         if (!existingArticle) {
@@ -498,7 +501,6 @@ app.get("/api1", isAuthenticated, async (req, res) => {
         }
       }
 
-      // 🔹 Store API Call in History
       await History.create({
         userId,
         action: "Fetched top headlines from fallback API",
@@ -511,6 +513,7 @@ app.get("/api1", isAuthenticated, async (req, res) => {
     }
   }
 });
+
 
 // Route to render joke search page
 app.get("/api2", isAuthenticated, async (req, res) => {
