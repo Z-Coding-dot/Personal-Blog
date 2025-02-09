@@ -14,7 +14,7 @@ const translate = require("google-translate-api-x");
 
 dotenv.config();
 const app = express();
-const PORT = 3001;
+const PORT = 3000;
 
 const httpsAgent = new https.Agent({
   rejectUnauthorized: false,
