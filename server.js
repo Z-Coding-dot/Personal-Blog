@@ -6,20 +6,21 @@ const bodyParser = require("body-parser");
 const path = require("path");
 const axios = require("axios");
 const bcrypt = require("bcrypt");
-const https = require("https");
 const flash = require("connect-flash");
+const i18n = require("i18n");
+const cookieParser = require("cookie-parser");
+const translate = require("google-translate-api-x");
 
 dotenv.config();
 const app = express();
 const PORT = 3000;
 
-// Create a custom HTTPS agent to ignore SSL certificate errors
 const httpsAgent = new https.Agent({
   rejectUnauthorized: false,
 });
 axios.defaults.httpsAgent = httpsAgent;
 
-// Middleware
+// Middleware Setup
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
 app.use(express.static("public"));
@@ -27,7 +28,7 @@ app.use(flash());
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));
 
-// Session setup
+// Session Setup
 app.use(
   session({
     secret: "your_secret_key",
@@ -35,6 +36,28 @@ app.use(
     saveUninitialized: true,
   })
 );
+app.use(cookieParser());
+
+// i18n Configuration
+i18n.configure({
+  locales: ["en", "fa", "ru"],
+  directory: path.join(__dirname, "locales"),
+  defaultLocale: "en",
+  cookie: "lang",
+  queryParameter: "lang",
+  autoReload: true,
+  syncFiles: true,
+});
+app.use(i18n.init);
+
+// Language Middleware
+app.use((req, res, next) => {
+  let lang = req.query.lang || req.cookies.lang || "en";
+  res.cookie("lang", lang, { maxAge: 900000, httpOnly: true });
+  res.setLocale(lang);
+  next();
+});
+
 app.use((req, res, next) => {
   res.locals.user = req.session.user || null; // Pass user to all views
   res.locals.successMessage = req.flash("success");
@@ -52,14 +75,27 @@ mongoose
   .catch((error) => console.error("MongoDB connection error:", error));
 
 // Schemas and Models
+// Define Schemas
 const userSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
   password: { type: String, required: true },
   isAdmin: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now },
+});
+
+// Define Item Schema
+const itemSchema = new mongoose.Schema({
+  pictures: [{ type: String, required: true }],
+  name_en: { type: String, required: true },
+  name_local: { type: String, required: true },
+  description_en: { type: String, required: true },
+  description_local: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now },
   updatedAt: Date,
   deletedAt: Date,
 });
+
+const Item = mongoose.model("Item", itemSchema);
 
 const api1Schema = new mongoose.Schema({
   title: String,
@@ -71,12 +107,15 @@ const api1Schema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
 });
 
-const api2Schema = new mongoose.Schema({
-  text: String,
-  author: String,
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+const jokeSchema = new mongoose.Schema({
+  setup: { type: String, required: true },
+  delivery: { type: String },
+  category: { type: String },
+  type: { type: String },
   createdAt: { type: Date, default: Date.now },
 });
+
+module.exports = mongoose.model("Joke", jokeSchema);
 
 const historySchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
@@ -87,7 +126,7 @@ const historySchema = new mongoose.Schema({
 
 const User = mongoose.model("User", userSchema);
 const API1 = mongoose.model("API1", api1Schema);
-const API2 = mongoose.model("API2", api2Schema);
+const Joke = mongoose.model("Joke", jokeSchema);
 const History = mongoose.model("History", historySchema);
 
 // Middleware to check session
@@ -97,6 +136,14 @@ function isAuthenticated(req, res, next) {
   }
   next();
 }
+
+app.get("/change-language", (req, res) => {
+  res.cookie("lang", req.query.lang, { maxAge: 900000, httpOnly: true });
+
+  // Secure redirect handling
+  const redirectUrl = req.get("Referrer") || "/";
+  res.redirect(redirectUrl);
+});
 
 // Routes
 app.get("/", (req, res) => res.render("login"));
@@ -151,15 +198,30 @@ app.post("/signup", async (req, res) => {
 });
 
 app.get("/main", isAuthenticated, (req, res) => {
-  res.render("main", { username: req.session.user.username });
+  res.render("main", {
+    username: req.session.user.username,
+    isAdmin: req.session.user.isAdmin, // Pass isAdmin to EJS
+  });
 });
 
 app.get("/history", isAuthenticated, async (req, res) => {
   try {
-    const history = await History.find({ userId: req.session.user._id }).sort({
-      date: -1,
+    const history = await History.find({ userId: req.session.user._id })
+      .sort({ date: -1 })
+      .limit(10); // Show last 10 searches
+
+    const jokeHistory = await History.find({
+      userId: req.session.user._id,
+      action: "searched_joke",
+    })
+      .sort({ date: -1 })
+      .limit(10); // Show last 10 joke searches
+
+    res.render("history", {
+      username: req.session.user.username,
+      history,
+      jokeHistory, // Pass joke history to history.ejs
     });
-    res.render("history", { username: req.session.user.username, history });
   } catch (error) {
     console.error("Error fetching history:", error);
     res.status(500).send("Internal Server Error");
@@ -239,142 +301,449 @@ app.post("/admin/delete/:id", async (req, res) => {
   }
 });
 
+///////////////////// Search News //////////////////////😎😎😎😎
+// ✅ Search News Route (User Query)
 app.get("/search-news", isAuthenticated, async (req, res) => {
-  const query = req.query.query || "default"; // Default value for query if undefined
-  try {
-    const response = await axios.get(
-      `https://newsapi.org/v2/everything?q=${query}&apiKey=${process.env.NEWS_API_KEY}`,
-      {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        },
-      }
-    );
+  const userQuery = req.query.query || "latest";
+  const targetLanguage = req.getLocale();
+  let translatedQuery = userQuery;
 
-    await History.create({
-      userId: req.session.user._id,
-      action: "Searched news articles",
-      input: query,
+  try {
+    if (!process.env.NEWS_API_KEY) {
+      console.error("❌ ERROR: Missing News API Key");
+      throw new Error("Missing News API Key");
+    }
+
+    // 🔹 Translate query if needed
+    if (targetLanguage !== "en") {
+      console.log("🔹 Translating query from", targetLanguage, "to English...");
+      const translatedText = await translate(userQuery, { to: "en" });
+      translatedQuery = translatedText.text;
+      console.log("✅ Translated Query:", translatedQuery);
+    }
+
+    console.log("🔹 Fetching NewsAPI for query:", translatedQuery);
+
+    const response = await axios.get(`https://newsapi.org/v2/everything`, {
+      params: {
+        q: encodeURIComponent(translatedQuery),
+        apiKey: process.env.NEWS_API_KEY,
+      },
+      headers: { "User-Agent": "Mozilla/5.0" }, // Prevent Cloudflare block
     });
 
-    res.render("api1", { articles: response.data.articles });
+    console.log("✅ NewsAPI Response Status:", response.status);
+    console.log("✅ NewsAPI Response Data:", response.data);
+
+    let articles = response.data.articles || [];
+    if (!articles.length) {
+      console.error("❌ No results from NewsAPI");
+      throw new Error("No results from NewsAPI");
+    }
+
+    // 🔹 Translate articles into user's language
+    articles = await Promise.all(
+      articles.map(async (article) => {
+        const titleText = article.title || "No title available";
+        let descText = article.description || "No description available";
+
+        if (!descText.trim()) descText = "No description available";
+
+        const titleTrans = await translate(titleText, { to: targetLanguage });
+        const descTrans = await translate(descText, { to: targetLanguage });
+
+        return {
+          title: titleTrans.text,
+          description: descTrans.text.trim() || "No description available",
+          url: article.url,
+          urlToImage: article.urlToImage || "/default-image.jpg",
+          source: article.source?.name || "Unknown Source",
+          publishedAt: article.publishedAt,
+        };
+      })
+    );
+
+    console.log(
+      "✅ Successfully fetched and translated",
+      articles.length,
+      "articles."
+    );
+
+    // ✅ Save user search in history (Store only top 3 results)
+    await History.create({
+      userId: req.session.user._id,
+      action: "Searched for news",
+      input: userQuery,
+      date: new Date(),
+      results: articles.slice(0, 3),
+    });
+
+    res.render("api1", { articles, currentLocale: targetLanguage });
   } catch (error) {
-    console.error("Primary API failed. Trying fallback API...", error.message);
+    console.error("❌ NewsAPI failed! Error:", error.message);
+
     try {
+      if (!process.env.SECOND_NEWS_API_KEY) {
+        console.error("❌ ERROR: Missing Fallback News API Key");
+        throw new Error("Missing Fallback News API Key");
+      }
+
+      console.log("🔹 Switching to Fallback API (NewsData.io)...");
+
       const fallbackResponse = await axios.get(
-        `https://newsdata.io/api/1/news?apikey=${process.env.SECOND_NEWS_API_KEY}&q=${query}`
+        "https://newsdata.io/api/1/news",
+        {
+          params: {
+            apikey: process.env.SECOND_NEWS_API_KEY,
+            q: userQuery,
+          },
+          headers: { "User-Agent": "Mozilla/5.0" },
+        }
       );
 
-      await History.create({
-        userId: req.session.user._id,
-        action: "Searched news articles using fallback API",
-        input: query,
-      });
+      console.log("✅ Fallback API Response Status:", fallbackResponse.status);
+      console.log("✅ Fallback API Response Data:", fallbackResponse.data);
 
-      res.render("api1", { articles: fallbackResponse.data.results }); // Adjusted for newsdata.io response
+      res.render("api1", {
+        articles: fallbackResponse.data.results,
+        currentLocale: targetLanguage,
+      });
     } catch (fallbackError) {
-      console.error("Both APIs failed:", fallbackError.message);
-      res.status(500).send("Error fetching news articles");
+      console.error("❌ Both APIs failed:", fallbackError.message);
+      res.status(500).send("❌ Internal Server Error. No news available.");
     }
   }
 });
 
+// ✅ Fetching Top Headlines
 app.get("/api1", isAuthenticated, async (req, res) => {
-  const query = "default"; // Default value for fallback if query is not applicable
   try {
-    const response = await axios.get(
-      `https://newsapi.org/v2/top-headlines?country=us&apiKey=${process.env.NEWS_API_KEY}`,
-      {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        },
-      }
-    );
+    // 🔹 Ensure API Key is Set
+    if (!process.env.NEWS_API_KEY) {
+      throw new Error("Missing News API Key");
+    }
+
+    // 🔹 Fetch top headlines
+    const response = await axios.get("https://newsapi.org/v2/top-headlines", {
+      params: {
+        country: "us",
+        apiKey: process.env.NEWS_API_KEY,
+      },
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+      },
+    });
 
     const userId = req.session.user._id;
 
+    // 🔹 Store unique articles in DB (Prevent duplicates)
     for (const article of response.data.articles) {
-      await API1.create({
-        title: article.title,
-        description: article.description,
-        url: article.url,
-        publishedAt: article.publishedAt,
-        source: article.source.name,
-        userId,
-      });
+      const existingArticle = await API1.findOne({ title: article.title });
+      if (!existingArticle) {
+        await API1.create({
+          title: article.title,
+          description: article.description || "No description available",
+          url: article.url,
+          publishedAt: article.publishedAt,
+          source: article.source.name,
+          userId,
+        });
+      }
     }
 
+    // 🔹 Store API Call in History
     await History.create({
       userId,
       action: "Fetched top headlines from API1",
     });
 
-    res.render("api1", { articles: response.data.articles });
+    res.render("api1", {
+      articles: response.data.articles,
+      currentLocale: req.getLocale(),
+    });
   } catch (error) {
-    console.error("Primary API failed. Trying fallback API...", error.message);
+    console.error("Primary API failed. Trying fallback API...");
+
     try {
+      // 🔹 Ensure Fallback API Key is Set
+      if (!process.env.SECOND_NEWS_API_KEY) {
+        throw new Error("Missing Fallback News API Key");
+      }
+
       const fallbackResponse = await axios.get(
-        `https://newsdata.io/api/1/news?apikey=${process.env.SECOND_NEWS_API_KEY}&q=${query}`
+        "https://newsdata.io/api/1/news",
+        {
+          params: {
+            apikey: process.env.SECOND_NEWS_API_KEY,
+            q: "default",
+          },
+        }
       );
 
       const userId = req.session.user._id;
 
+      // 🔹 Store unique fallback articles in DB
       for (const article of fallbackResponse.data.results) {
-        await API1.create({
-          title: article.title,
-          description: article.description,
-          url: article.link, // Adjusted for newsdata.io response
-          publishedAt: article.pubDate, // Adjusted for newsdata.io response
-          source: article.source_id, // Adjusted for newsdata.io response
-          userId,
-        });
+        const existingArticle = await API1.findOne({ title: article.title });
+        if (!existingArticle) {
+          await API1.create({
+            title: article.title,
+            description: article.description || "No description available",
+            url: article.link,
+            publishedAt: article.pubDate,
+            source: article.source_id,
+            userId,
+          });
+        }
       }
 
+      // 🔹 Store API Call in History
       await History.create({
         userId,
         action: "Fetched top headlines from fallback API",
       });
 
-      res.render("api1", { articles: fallbackResponse.data.results }); // Adjusted for newsdata.io response
+      res.render("api1", { articles: fallbackResponse.data.results });
     } catch (fallbackError) {
       console.error("Both APIs failed:", fallbackError.message);
-      res.status(500).send("Error fetching news articles");
+      res.status(500).send("Error fetching news articles.");
     }
   }
 });
 
-app.get("/api2", isAuthenticated, (req, res) => {
-  res.render("api2", { quotes: [] });
+// Route to render joke search page
+app.get("/api2", isAuthenticated, async (req, res) => {
+  try {
+    // Fetch user's joke search history
+    const history = await History.find({ userId: req.session.user._id })
+      .sort({ date: -1 })
+      .limit(5); // Show last 5 searches
+
+    // Fetch recent jokes from MongoDB
+    const jokes = await Joke.find().sort({ createdAt: -1 }).limit(5);
+
+    res.render("api2", { jokes, history, currentLocale: req.getLocale() });
+  } catch (error) {
+    console.error("Error fetching history:", error);
+    res.render("api2", {
+      jokes: [],
+      history: [],
+      currentLocale: req.getLocale(),
+    });
+  }
 });
 
-app.get("/search-quotes", isAuthenticated, async (req, res) => {
-  const query = req.query.query;
-  try {
-    const https = require("https");
-    const httpsAgent = new https.Agent({ rejectUnauthorized: false });
+// Home Route
+app.get("/", (req, res) => {
+  res.render("api2", { jokes: [], history: [] });
+});
 
-    const response = await axios.get(
-      `https://api.quotable.io/search/quotes?query=${query}`,
-      { httpsAgent }
+// Search Jokes Route
+app.get("/search-jokes", isAuthenticated, async (req, res) => {
+  let userQuery = req.query.query || "funny"; // Default keyword
+  const targetLanguage = req.query.language_code || "en"; // Default to English
+
+  try {
+    console.log(
+      `User search query: ${userQuery} (Target Language: ${targetLanguage})`
     );
 
-    await History.create({
-      userId: req.session.user._id,
-      action: "Searched for quotes",
-      input: query,
-    });
+    // Step 1: Translate the query to English if it's not already in English
+    if (targetLanguage !== "en") {
+      const translatedQuery = await translate(userQuery, { to: "en" });
+      userQuery = translatedQuery.text;
+      console.log(`Translated query to English: ${userQuery}`);
+    }
 
-    res.render("api2", { quotes: response.data.results });
+    // Step 2: Fetch jokes using the translated query
+    const response = await axios.get(
+      `https://api.chucknorris.io/jokes/search?query=${encodeURIComponent(
+        userQuery
+      )}`
+    );
+
+    console.log("API Response:", response.data);
+
+    let jokes = response.data.result || [];
+    if (!jokes.length) throw new Error("No jokes found.");
+
+    // Step 3: Translate jokes back to the selected language (if needed)
+    jokes = await Promise.all(
+      jokes.map(async (joke) => {
+        if (targetLanguage !== "en") {
+          try {
+            const translatedJoke = await translate(joke.value, {
+              to: targetLanguage,
+            });
+            return { joke: translatedJoke.text, category: "Chuck Norris" };
+          } catch (err) {
+            console.error("Translation error:", err.message);
+            return { joke: joke.value, category: "Chuck Norris" };
+          }
+        } else {
+          return { joke: joke.value, category: "Chuck Norris" };
+        }
+      })
+    );
+
+    // Step 4: Save to MongoDB (avoid duplicates)
+    for (let joke of jokes.slice(0, 5)) {
+      const existingJoke = await Joke.findOne({ setup: joke.joke });
+      if (!existingJoke) {
+        await Joke.create({
+          setup: joke.joke,
+          delivery: null,
+          category: joke.category || "General",
+          type: "single",
+        });
+      }
+    }
+
+    // Step 5: Save search history
+    const newSearch = new History({
+      userId: req.session.user._id,
+      input: req.query.query, // Save original input
+      language: targetLanguage,
+      action: "searched_joke",
+      date: new Date(),
+    });
+    await newSearch.save();
+
+    // Step 6: Fetch updated history
+    const history = await History.find({ userId: req.session.user._id })
+      .sort({ date: -1 })
+      .limit(5);
+
+    // Step 7: Render results
+    res.render("api2", { jokes, history, user: req.session.user });
   } catch (error) {
-    console.error("Error fetching quotes:", error);
-    res.status(500).send("Error fetching quotes");
+    console.error("Error fetching jokes:", error.message);
+    res.render("api2", {
+      jokes: [],
+      history: [],
+      error: "Error fetching jokes",
+      user: req.session.user,
+    });
   }
 });
 
 app.use(express.static(path.join(__dirname, "public")));
-// Start the server
+
+// Add Item (Admin Only)
+app.post("/admin/item/add", isAuthenticated, async (req, res) => {
+  if (!req.session.user.isAdmin) return res.status(403).send("Access denied");
+
+  const { pictures, name_en, name_local, description_en, description_local } =
+    req.body;
+
+  try {
+    // Validate and ensure pictures is an array of valid URLs
+    const validatedPictures = Array.isArray(pictures)
+      ? pictures.filter(isValidURL)
+      : pictures
+          .split(",")
+          .map((pic) => pic.trim())
+          .filter(isValidURL);
+
+    const newItem = new Item({
+      pictures: validatedPictures,
+      name_en,
+      name_local,
+      description_en,
+      description_local,
+    });
+    await newItem.save();
+    req.flash("success", "Item added successfully");
+    res.redirect("/admin");
+  } catch (error) {
+    console.error("Error adding item:", error);
+    req.flash("error", "Failed to add item");
+    res.redirect("/admin");
+  }
+});
+
+// Edit Item (Admin Only)
+app.put("/admin/item/edit/:id", isAuthenticated, async (req, res) => {
+  if (!req.session.user.isAdmin) return res.status(403).send("Access denied");
+
+  const { name_en, name_local, description_en, description_local, pictures } =
+    req.body;
+
+  try {
+    // Validate and ensure pictures is an array of valid URLs
+    const validatedPictures = Array.isArray(pictures)
+      ? pictures.filter(isValidURL)
+      : pictures
+          .split(",")
+          .map((pic) => pic.trim())
+          .filter(isValidURL);
+
+    await Item.findByIdAndUpdate(req.params.id, {
+      $set: {
+        name_en,
+        name_local,
+        description_en,
+        description_local,
+        pictures: validatedPictures,
+        updatedAt: new Date(),
+      },
+    });
+
+    res.sendStatus(200);
+  } catch (error) {
+    console.error("Error updating item:", error);
+    res.status(500).send("Internal Server Error");
+  }
+});
+
+// Soft Delete Item (Admin Only)
+app.delete("/admin/item/delete/:id", isAuthenticated, async (req, res) => {
+  if (!req.session.user.isAdmin) return res.status(403).send("Access denied");
+
+  try {
+    await Item.findByIdAndUpdate(req.params.id, { deletedAt: new Date() });
+    res.sendStatus(200);
+  } catch (error) {
+    console.error("Error deleting item:", error);
+    res.status(500).send("Internal Server Error");
+  }
+});
+
+// Fetch All Active Items
+app.get("/items", async (req, res) => {
+  try {
+    const items = await Item.find({ deletedAt: null });
+    res.json(items);
+  } catch (error) {
+    console.error("Error fetching items:", error);
+    res.status(500).send("Internal Server Error");
+  }
+});
+
+// Fetch Single Item by ID
+app.get("/items/:id", async (req, res) => {
+  try {
+    const item = await Item.findById(req.params.id);
+    if (!item || item.deletedAt) {
+      return res.status(404).send("Item not found");
+    }
+    res.json(item);
+  } catch (error) {
+    console.error("Error fetching item:", error);
+    res.status(500).send("Internal Server Error");
+  }
+});
+
+// Utility to validate URLs
+function isValidURL(url) {
+  try {
+    new URL(url);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 app.listen(PORT, () =>
   console.log(`Server is running on http://localhost:${PORT}`)
 );
